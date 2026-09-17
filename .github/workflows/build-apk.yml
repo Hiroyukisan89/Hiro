@@ -1,0 +1,254 @@
+name: Build HIRO Shift Money APK
+on:
+  push:
+    paths:
+      - 'app.b64'
+      - '.github/workflows/build-apk.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Create Android project from V3 FULL
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work/source
+          base64 -d app.b64 > work/source.zip
+          unzip -q work/source.zip -d work/source
+          WEB_DIR="$(dirname "$(find work/source -name index.html -type f | head -1)")"
+          test -f "$WEB_DIR/index.html"
+
+          mkdir -p android/app/src/main/java/hu/hiro/shiftmoney
+          mkdir -p android/app/src/main/res/values
+          mkdir -p android/app/src/main/res/drawable
+          mkdir -p android/app/src/main/assets
+          cp -a "$WEB_DIR"/. android/app/src/main/assets/
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('android/app/src/main/assets/js/app.js')
+          s=p.read_text(encoding='utf-8')
+          old="function downloadBlob(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}"
+          new="function downloadBlob(blob,name){if(window.Android&&typeof Android.saveBase64File==='function'){const r=new FileReader();r.onload=()=>{try{const b64=String(r.result).split(',')[1]||'';Android.saveBase64File(name,blob.type||'application/octet-stream',b64);toast('Mentés indítva: '+name)}catch(e){toast('Mentési hiba')}};r.readAsDataURL(blob);return;}const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}"
+          if old in s:
+              s=s.replace(old,new)
+          p.write_text(s,encoding='utf-8')
+          PY
+
+          cat > android/settings.gradle <<'GRADLE'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "HIROShiftMoney"
+          include ':app'
+          GRADLE
+
+          cat > android/build.gradle <<'GRADLE'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          GRADLE
+
+          cat > android/gradle.properties <<'GRADLE'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          GRADLE
+
+          cat > android/app/build.gradle <<'GRADLE'
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'hu.hiro.shiftmoney'
+              compileSdk 35
+              defaultConfig {
+                  applicationId 'hu.hiro.shiftmoney'
+                  minSdk 26
+                  targetSdk 35
+                  versionCode 3
+                  versionName '3.0'
+              }
+              buildTypes {
+                  debug { debuggable false }
+                  release { minifyEnabled false; shrinkResources false }
+              }
+          }
+          dependencies { implementation 'androidx.webkit:webkit:1.12.1' }
+          GRADLE
+
+          cat > android/app/src/main/AndroidManifest.xml <<'XML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application android:allowBackup="true" android:label="HIRO Shift &amp; Money"
+                  android:icon="@drawable/ic_launcher" android:roundIcon="@drawable/ic_launcher"
+                  android:theme="@style/AppTheme" android:usesCleartextTraffic="false">
+                  <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="portrait">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          XML
+
+          cat > android/app/src/main/res/values/strings.xml <<'XML'
+          <resources><string name="app_name">HIRO Shift &amp; Money</string></resources>
+          XML
+
+          cat > android/app/src/main/res/values/themes.xml <<'XML'
+          <resources>
+              <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:colorAccent">#169BFF</item>
+                  <item name="android:navigationBarColor">#071018</item>
+                  <item name="android:statusBarColor">#071018</item>
+                  <item name="android:windowLightStatusBar">false</item>
+              </style>
+          </resources>
+          XML
+
+          cat > android/app/src/main/res/drawable/ic_launcher.xml <<'XML'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+              <path android:fillColor="#071018" android:pathData="M0,0h108v108h-108z"/>
+              <path android:fillColor="#169BFF" android:pathData="M16,16h76v76h-76z"/>
+              <path android:fillColor="#071018" android:pathData="M27,29h12v19h30v-19h12v50h-12v-20h-30v20h-12z"/>
+          </vector>
+          XML
+
+          cat > android/app/src/main/java/hu/hiro/shiftmoney/MainActivity.java <<'JAVA'
+          package hu.hiro.shiftmoney;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.os.Environment;
+          import android.provider.MediaStore;
+          import android.content.ContentValues;
+          import android.content.Intent;
+          import android.net.Uri;
+          import android.util.Base64;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebResourceResponse;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.Toast;
+          import androidx.annotation.Nullable;
+          import androidx.webkit.WebViewAssetLoader;
+          import java.io.OutputStream;
+
+          public class MainActivity extends Activity {
+              private WebView webView;
+              private android.webkit.ValueCallback<Uri[]> fileCallback;
+              private static final int FILE_CHOOSER_REQUEST = 9876;
+
+              @Override protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  webView = new WebView(this);
+                  setContentView(webView);
+                  WebSettings s = webView.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setDatabaseEnabled(true);
+                  s.setAllowFileAccess(false);
+                  s.setAllowContentAccess(true);
+                  s.setMediaPlaybackRequiresUserGesture(false);
+
+                  final WebViewAssetLoader loader = new WebViewAssetLoader.Builder()
+                      .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this)).build();
+                  webView.setWebViewClient(new WebViewClient() {
+                      @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                          return loader.shouldInterceptRequest(request.getUrl());
+                      }
+                  });
+                  webView.setWebChromeClient(new WebChromeClient() {
+                      @Override public boolean onShowFileChooser(WebView v, android.webkit.ValueCallback<Uri[]> cb, FileChooserParams params) {
+                          if (fileCallback != null) fileCallback.onReceiveValue(null);
+                          fileCallback = cb;
+                          try { startActivityForResult(params.createIntent(), FILE_CHOOSER_REQUEST); return true; }
+                          catch (Exception e) { fileCallback.onReceiveValue(null); fileCallback=null; return false; }
+                      }
+                  });
+                  webView.addJavascriptInterface(new AndroidBridge(), "Android");
+                  webView.loadUrl("https://appassets.androidplatform.net/assets/index.html");
+              }
+
+              @Override protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+                  super.onActivityResult(requestCode, resultCode, data);
+                  if (requestCode == FILE_CHOOSER_REQUEST && fileCallback != null) {
+                      fileCallback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data));
+                      fileCallback = null;
+                  }
+              }
+
+              public class AndroidBridge {
+                  @JavascriptInterface public void saveBase64File(String name, String mime, String base64) {
+                      runOnUiThread(() -> {
+                          try {
+                              ContentValues values = new ContentValues();
+                              values.put(MediaStore.Downloads.DISPLAY_NAME, name);
+                              values.put(MediaStore.Downloads.MIME_TYPE, (mime == null || mime.isEmpty()) ? "application/octet-stream" : mime);
+                              values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/HIRO Shift Money");
+                              Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                              if (uri == null) throw new Exception("Fájl létrehozási hiba");
+                              byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
+                              try (OutputStream out = getContentResolver().openOutputStream(uri)) {
+                                  if (out == null) throw new Exception("Fájl megnyitási hiba");
+                                  out.write(bytes);
+                              }
+                              Toast.makeText(MainActivity.this, "Mentve: Letöltések/HIRO Shift Money", Toast.LENGTH_LONG).show();
+                          } catch (Exception e) {
+                              Toast.makeText(MainActivity.this, "Mentési hiba: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                          }
+                      });
+                  }
+                  @JavascriptInterface public void toast(String message) {
+                      runOnUiThread(() -> Toast.makeText(MainActivity.this, message, Toast.LENGTH_SHORT).show());
+                  }
+              }
+
+              @Override public void onBackPressed() {
+                  if (webView != null && webView.canGoBack()) webView.goBack(); else super.onBackPressed();
+              }
+          }
+          JAVA
+
+      - name: Build APK
+        working-directory: android
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Rename APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk HIRO_Shift_and_Money_V3_FULL.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HIRO_Shift_and_Money_V3_FULL_APK
+          path: HIRO_Shift_and_Money_V3_FULL.apk
+          retention-days: 1
